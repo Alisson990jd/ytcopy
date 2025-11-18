@@ -3,10 +3,6 @@ name: YouTube Copyright Removal Automation
 on:
   # Execução manual via interface do GitHub
   workflow_dispatch:
-  
-  # Execução agendada (opcional - ajuste conforme necessário)
-  # schedule:
-  #   - cron: '0 2 * * *'  # Diariamente às 2:00 AM UTC
 
 jobs:
   run-youtube-automation:
@@ -20,7 +16,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
       
       - name: 📦 Install system dependencies
         run: |
