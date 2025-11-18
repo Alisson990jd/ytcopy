@@ -10,6 +10,8 @@ import platform
 import subprocess
 import shutil
 import time
+import zipfile
+import requests
 from pathlib import Path
 
 # Detecta o sistema operacional
@@ -32,7 +34,9 @@ def instalar_dependencias():
     
     dependencias = [
         "selenium",
-        "xvfbwrapper"
+        "xvfbwrapper",
+        "requests",
+        "gdown"
     ]
     
     for dep in dependencias:
@@ -74,6 +78,7 @@ def instalar_dependencias():
 instalar_dependencias()
 
 # Importa após instalação
+import gdown
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -87,6 +92,92 @@ from selenium.webdriver.common.action_chains import ActionChains
 # ========================
 # FUNÇÕES AUXILIARES
 # ========================
+
+def baixar_perfil_chrome():
+    """Baixa o perfil do Chrome do Google Drive"""
+    print("\n📥 Baixando perfil do Chrome do Google Drive...")
+    
+    # URL do arquivo no Google Drive
+    file_id = "14aThtiWSRSw6jBU94fsFHZXWORUucRJk"
+    url = f"https://drive.google.com/uc?id={file_id}"
+    
+    # Define o caminho para salvar
+    if IS_WINDOWS:
+        download_dir = os.path.join(os.getenv('TEMP'), 'ChromeProfile')
+    else:
+        download_dir = '/tmp/ChromeProfile'
+    
+    # Remove diretório anterior se existir
+    if os.path.exists(download_dir):
+        shutil.rmtree(download_dir)
+    
+    os.makedirs(download_dir, exist_ok=True)
+    
+    zip_path = os.path.join(download_dir, "profile6.zip")
+    
+    try:
+        # Baixa o arquivo usando gdown
+        print("⏳ Baixando arquivo (pode levar alguns minutos)...")
+        gdown.download(url, zip_path, quiet=False)
+        print("✓ Download concluído!")
+        
+        # Extrai o arquivo
+        print("📂 Extraindo perfil...")
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(download_dir)
+        
+        # Remove o arquivo zip
+        os.remove(zip_path)
+        print("✓ Perfil extraído com sucesso!")
+        
+        # Procura pela pasta "Profile 6" (case insensitive)
+        profile_path = None
+        for item in os.listdir(download_dir):
+            if item.lower() == "profile 6":
+                profile_path = os.path.join(download_dir, item)
+                break
+        
+        if not profile_path:
+            # Se não encontrou, procura qualquer pasta
+            for item in os.listdir(download_dir):
+                item_path = os.path.join(download_dir, item)
+                if os.path.isdir(item_path):
+                    profile_path = item_path
+                    break
+        
+        if profile_path:
+            print(f"✓ Perfil encontrado: {profile_path}")
+            return profile_path
+        else:
+            print("⚠ Pasta do perfil não encontrada no arquivo extraído")
+            return None
+            
+    except Exception as e:
+        print(f"❌ Erro ao baixar perfil: {e}")
+        print("Tentando usar perfil local...")
+        return None
+
+def preparar_perfil_para_selenium(profile_path):
+    """Prepara o perfil baixado para uso com Selenium"""
+    if IS_WINDOWS:
+        temp_dir = os.path.join(os.getenv('TEMP'), 'ChromeSeleniumProfile')
+    else:
+        temp_dir = '/tmp/ChromeSeleniumProfile'
+    
+    # Remove diretório temporário anterior se existir
+    if os.path.exists(temp_dir):
+        shutil.rmtree(temp_dir)
+    
+    os.makedirs(temp_dir)
+    
+    # Copia o perfil para um diretório "Default" dentro do temp_dir
+    dest = os.path.join(temp_dir, "Default")
+    
+    print(f"\n📋 Preparando perfil para Selenium...")
+    shutil.copytree(profile_path, dest, ignore=shutil.ignore_patterns('Service Worker', 'Code Cache'))
+    print("✓ Perfil preparado")
+    
+    return temp_dir
 
 def encontrar_perfis_chrome():
     """Encontra todos os perfis do Chrome disponíveis"""
@@ -111,48 +202,54 @@ def encontrar_perfis_chrome():
     return user_data_dir, perfis
 
 def selecionar_perfil():
-    """Seleciona automaticamente o primeiro perfil disponível"""
+    """Tenta baixar o perfil do Google Drive, senão usa perfil local"""
+    # Primeiro tenta baixar o perfil do Google Drive
+    profile_path = baixar_perfil_chrome()
+    
+    if profile_path:
+        temp_user_data = preparar_perfil_para_selenium(profile_path)
+        print(f"✓ Usando perfil baixado do Google Drive")
+        return temp_user_data, True
+    
+    # Se falhou, tenta usar perfil local
+    print("\n🔍 Buscando perfis locais do Chrome...")
     user_data_dir, perfis = encontrar_perfis_chrome()
     
     if not perfis:
         print("\n⚠️ Nenhum perfil do Chrome encontrado!")
         print("O Chrome será aberto sem perfil (você precisará fazer login manualmente)")
-        return None, None
+        return None, False
     
     # Seleciona automaticamente o primeiro perfil (Default)
     perfil_escolhido = perfis[0]
-    print(f"\n✓ Perfil selecionado automaticamente: {perfil_escolhido[0]}")
-    return user_data_dir, perfil_escolhido[0]
-
-def criar_perfil_temporario(user_data_dir, profile_name):
-    """Cria uma cópia temporária do perfil"""
+    print(f"\n✓ Perfil local selecionado: {perfil_escolhido[0]}")
+    
+    # Cria cópia temporária do perfil local
     if IS_WINDOWS:
         temp_dir = os.path.join(os.getenv('TEMP'), 'ChromeSeleniumProfile')
     else:
         temp_dir = '/tmp/ChromeSeleniumProfile'
     
-    # Remove diretório temporário anterior se existir
     if os.path.exists(temp_dir):
         shutil.rmtree(temp_dir)
     
     os.makedirs(temp_dir)
     
-    # Copia o perfil
-    source = os.path.join(user_data_dir, profile_name)
+    source = os.path.join(user_data_dir, perfil_escolhido[0])
     dest = os.path.join(temp_dir, "Default")
     
-    print(f"\n📋 Copiando perfil {profile_name}...")
+    print(f"\n📋 Copiando perfil {perfil_escolhido[0]}...")
     shutil.copytree(source, dest, ignore=shutil.ignore_patterns('Service Worker', 'Code Cache'))
     print("✓ Perfil copiado")
     
-    return temp_dir
+    return temp_dir, False
 
 # ========================
 # CONFIGURAÇÃO DO CHROME
 # ========================
 
 print("\n" + "="*60)
-user_data_dir, profile_name = selecionar_perfil()
+temp_user_data, is_downloaded = selecionar_perfil()
 
 chrome_options = Options()
 chrome_options.add_argument("--start-maximized")
@@ -164,8 +261,7 @@ chrome_options.add_argument("--no-sandbox")
 chrome_options.add_argument("--disable-dev-shm-usage")
 
 # Configura perfil se foi selecionado
-if user_data_dir and profile_name:
-    temp_user_data = criar_perfil_temporario(user_data_dir, profile_name)
+if temp_user_data:
     chrome_options.add_argument(f"user-data-dir={temp_user_data}")
 
 # ========================
@@ -547,49 +643,6 @@ def processar_video_com_copyright(video_element):
                         salvar.click()
                         print("✓ Clicou em 'Salvar'")
                         time.sleep(2)
-                        tirar_screenshot(f"conteudo_{conteudos_processados:02d}_07_salvar")
-                    except Exception as e:
-                        print(f"⚠ Erro ao clicar em Salvar: {e}")
-                        tirar_screenshot(f"conteudo_{conteudos_processados:02d}_erro_salvar")
-                        return False
-                
-                elif tipo_acao == "cortar_trecho":
-                    try:
-                        try:
-                            continuar = wait.until(EC.element_to_be_clickable(
-                                (By.XPATH, "//button[contains(@aria-label, 'Continuar')]")
-                            ))
-                        except:
-                            continuar = wait.until(EC.element_to_be_clickable(
-                                (By.XPATH, "//ytcp-button-shape//button[.//div[contains(text(), 'Continuar')]]")
-                            ))
-                        continuar.click()
-                        print("✓ Clicou em 'Continuar'")
-                        time.sleep(3)
-                        tirar_screenshot(f"conteudo_{conteudos_processados:02d}_06_continuar_corte")
-                    except Exception as e:
-                        print(f"⚠ Erro ao clicar em Continuar: {e}")
-                        tirar_screenshot(f"conteudo_{conteudos_processados:02d}_erro_continuar")
-                        return False
-                    
-                    try:
-                        try:
-                            salvar = wait.until(EC.element_to_be_clickable(
-                                (By.XPATH, "//button[contains(@aria-label, 'Salvar')]")
-                            ))
-                        except:
-                            try:
-                                salvar = wait.until(EC.element_to_be_clickable(
-                                    (By.XPATH, "//ytcp-button-shape//button[.//div[contains(text(), 'Salvar')]]")
-                                ))
-                            except:
-                                salvar = wait.until(EC.element_to_be_clickable(
-                                    (By.XPATH, "//*[contains(text(), 'Salvar') and (self::button or ancestor::button)]")
-                                ))
-                        
-                        salvar.click()
-                        print("✓ Clicou em 'Salvar'")
-                        time.sleep(2)
                         tirar_screenshot(f"conteudo_{conteudos_processados:02d}_07_salvar_corte")
                     except Exception as e:
                         print(f"⚠ Erro ao clicar em Salvar: {e}")
@@ -873,4 +926,47 @@ finally:
             pass
     
     print(f"\n📸 Todos os screenshots foram salvos em: {screenshots_dir}/")
-    print(f"📸 Total de screenshots capturados: {screenshot_counter}")
+    print(f"📸 Total de screenshots capturados: {screenshot_counter}")"conteudo_{conteudos_processados:02d}_07_salvar")
+                    except Exception as e:
+                        print(f"⚠ Erro ao clicar em Salvar: {e}")
+                        tirar_screenshot(f"conteudo_{conteudos_processados:02d}_erro_salvar")
+                        return False
+                
+                elif tipo_acao == "cortar_trecho":
+                    try:
+                        try:
+                            continuar = wait.until(EC.element_to_be_clickable(
+                                (By.XPATH, "//button[contains(@aria-label, 'Continuar')]")
+                            ))
+                        except:
+                            continuar = wait.until(EC.element_to_be_clickable(
+                                (By.XPATH, "//ytcp-button-shape//button[.//div[contains(text(), 'Continuar')]]")
+                            ))
+                        continuar.click()
+                        print("✓ Clicou em 'Continuar'")
+                        time.sleep(3)
+                        tirar_screenshot(f"conteudo_{conteudos_processados:02d}_06_continuar_corte")
+                    except Exception as e:
+                        print(f"⚠ Erro ao clicar em Continuar: {e}")
+                        tirar_screenshot(f"conteudo_{conteudos_processados:02d}_erro_continuar")
+                        return False
+                    
+                    try:
+                        try:
+                            salvar = wait.until(EC.element_to_be_clickable(
+                                (By.XPATH, "//button[contains(@aria-label, 'Salvar')]")
+                            ))
+                        except:
+                            try:
+                                salvar = wait.until(EC.element_to_be_clickable(
+                                    (By.XPATH, "//ytcp-button-shape//button[.//div[contains(text(), 'Salvar')]]")
+                                ))
+                            except:
+                                salvar = wait.until(EC.element_to_be_clickable(
+                                    (By.XPATH, "//*[contains(text(), 'Salvar') and (self::button or ancestor::button)]")
+                                ))
+                        
+                        salvar.click()
+                        print("✓ Clicou em 'Salvar'")
+                        time.sleep(2)
+                        tirar_screenshot(f
