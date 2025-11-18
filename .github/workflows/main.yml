@@ -1,0 +1,113 @@
+name: YouTube Copyright Removal Automation
+
+on:
+  # Execução manual via interface do GitHub
+  workflow_dispatch:
+  
+  # Execução agendada (opcional - ajuste conforme necessário)
+  # schedule:
+  #   - cron: '0 2 * * *'  # Diariamente às 2:00 AM UTC
+
+jobs:
+  run-youtube-automation:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: 📦 Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb wget
+          
+          # Instala Google Chrome
+          wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo dpkg -i google-chrome-stable_current_amd64.deb || true
+          sudo apt-get -f install -y -qq
+          rm -f google-chrome-stable_current_amd64.deb
+          
+          # Instala ChromeDriver
+          sudo apt-get install -y -qq chromium-chromedriver
+          
+          # Verifica instalações
+          google-chrome --version
+          chromedriver --version
+      
+      - name: 📚 Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install selenium xvfbwrapper
+      
+      - name: 🚀 Run YouTube automation script
+        id: run_script
+        continue-on-error: true
+        run: |
+          echo "🎬 Iniciando automação..."
+          python yt.py
+          echo "script_status=$?" >> $GITHUB_OUTPUT
+        timeout-minutes: 60
+      
+      - name: 📸 Upload screenshots as artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-automation-screenshots-${{ github.run_number }}
+          path: screenshots_*/
+          retention-days: 30
+          if-no-files-found: warn
+      
+      - name: 📊 Generate execution summary
+        if: always()
+        run: |
+          echo "## 🎬 YouTube Automation Execution Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Execution Date:** $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "**Workflow Run:** #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -d screenshots_* ]; then
+            SCREENSHOT_COUNT=$(find screenshots_*/ -name "*.png" 2>/dev/null | wc -l)
+            echo "**Screenshots Captured:** $SCREENSHOT_COUNT" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            if [ $SCREENSHOT_COUNT -gt 0 ]; then
+              echo "### 📸 Screenshots Location" >> $GITHUB_STEP_SUMMARY
+              echo "Check the artifacts section to download all screenshots." >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "**Screenshots:** No screenshots folder found" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.run_script.outputs.script_status }}" == "0" ]; then
+            echo "**Status:** ✅ Completed successfully" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Status:** ⚠️ Completed with warnings or errors" >> $GITHUB_STEP_SUMMARY
+          fi
+      
+      - name: 🧹 Cleanup
+        if: always()
+        run: |
+          # Remove arquivos temporários do Chrome
+          rm -rf /tmp/ChromeSeleniumProfile 2>/dev/null || true
+          
+          # Remove arquivos temporários
+          rm -f google-chrome-stable_current_amd64.deb 2>/dev/null || true
+      
+      - name: ✅ Workflow completed
+        if: success()
+        run: echo "✅ Automação concluída com sucesso!"
+      
+      - name: ⚠️ Workflow finished with issues
+        if: failure()
+        run: |
+          echo "⚠️ A automação foi concluída mas encontrou alguns problemas."
+          echo "Verifique os logs acima e os screenshots nos artifacts para mais detalhes."
